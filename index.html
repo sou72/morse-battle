@@ -121,7 +121,10 @@
   .ragebar-label{display:flex;justify-content:space-between;font-size:9.5px;color:var(--faded);margin-bottom:3px;letter-spacing:.12em;font-family:'Shippori Mincho',serif;}
   .ragebar-label .warn{color:var(--shu);opacity:0;transition:opacity .2s;font-weight:700;}
   .ragebar-label .warn.show{opacity:1;animation:blinkWarn .5s step-end infinite;}
+  .ragebar-label .warn.show.danger{animation:blinkWarn .22s step-end infinite;}
   @keyframes blinkWarn{50%{opacity:.25;}}
+  .arena.bossShake{animation:arenaShake .4s cubic-bezier(.36,.07,.19,.97);}
+  @keyframes arenaShake{10%,90%{transform:translateX(-2px);}20%,80%{transform:translateX(4px);}30%,50%,70%{transform:translateX(-6px);}40%,60%{transform:translateX(6px);}}
   .ragebar{width:100%;height:7px;background:rgba(43,38,32,.10);border:1px solid rgba(43,38,32,.4);overflow:hidden;}
   .ragebar .fill{height:100%;background:repeating-linear-gradient(135deg,var(--ai) 0 6px,var(--ai-deep) 6px 12px);width:0%;}
 
@@ -293,6 +296,9 @@
   .go-panel .newrecord{font-family:'Shippori Mincho',serif;font-size:12px;font-weight:800;color:var(--shu);margin:10px 0 0;letter-spacing:.2em;display:none;}
   .go-panel .newrecord.show{display:block;animation:blinkWarn .7s step-end infinite;}
   .go-panel .btn{margin-top:20px;width:100%;padding:13px;background:var(--shu);color:#f8f0e1;font-weight:800;border-color:var(--shu-deep);font-size:13px;letter-spacing:.2em;}
+  .go-panel.pause-panel{padding-bottom:26px;}
+  .go-panel .pause-h2{color:var(--ai-deep);}
+  .go-panel .pause-resume{background:var(--ai);border-color:var(--ai-deep);}
 
   @media (max-width:400px){.kana{font-size:22px;}.lcell{min-width:34px;padding:6px 5px;}.masthead h1{font-size:19px;}}
 
@@ -482,6 +488,7 @@
     <button class="btn toggle on" id="soundToggle">効果音 ON</button>
     <button class="btn toggle on" id="bgmToggle">BGM ON</button>
     <button class="btn toggle" id="metroToggle">リズムガイド OFF</button>
+    <button class="btn" id="pauseBtn">一時停止</button>
     <button class="btn" id="skip">にげる</button>
   </div>
 </div>
@@ -493,9 +500,19 @@
     <div class="row"><span>スコア</span><b id="goScore">0</b></div>
     <div class="row"><span>とうたつウェーブ</span><b id="goWave">1</b></div>
     <div class="row"><span>さいだいコンボ</span><b id="goCombo">0</b></div>
+    <div class="row"><span>正答率</span><b id="goAccuracy">100%</b></div>
+    <div class="row"><span>プレイ時間</span><b id="goTime">0:00</b></div>
     <div class="row"><span>ベスト</span><b id="goBest">0</b></div>
     <div class="newrecord" id="newRecord">☆ ニューレコード！ ☆</div>
     <button class="btn" id="retry">もういちど挑戦！</button>
+  </div>
+</div>
+
+<div class="gameover" id="pauseOverlay">
+  <div class="go-panel pause-panel">
+    <h2 class="pause-h2">一時停止</h2>
+    <p class="gosub">PAUSED</p>
+    <button class="btn pause-resume" id="resumeBtn">再開する</button>
   </div>
 </div>
 
@@ -580,16 +597,18 @@ let wave=1, score=0, combo=0, maxCombo=0, best=0, playerHP=5, playerMaxHP=5;
 let enemy = { hp:0, maxHp:0, isBoss:false };
 let state = { word:null, letterIndex:0, buffer:'', isPressed:false, pressStart:0, lastRelease:null, commitTimer:null, pressLog:[] };
 let gameActive = true;
+let paused = false;
+let totalCorrectLetters=0, totalMistakes=0, runStartTime=performance.now();
 function isBossWave(w){ return w % 5 === 0; }
 
 
 const el = {};
 ['wave','score','combo','best','comboChip','enemyname','enemybox','enemyhptext','enemyhpfill','arena',
  'category','speedInfo','kana','letters','readout','key','toast','speedbar','metroToggle','skip',
- 'playerrow','gameover','goScore','goWave','goCombo','goBest','newRecord','retry','soundToggle','bgmToggle',
+ 'playerrow','gameover','goScore','goWave','goCombo','goBest','goTime','goAccuracy','newRecord','retry','soundToggle','bgmToggle',
  'missOverlay','missTag','missWrongCode','missWrongLetter','missCorrectCode','missCorrectLetter',
  'metroDot','metroWrap','fxLayer','waveBanner','waveBannerText','dmgFlash','ragefill','rageWarn',
- 'sfxRange','sfxVal','bgmRange','bgmVal'].forEach(id=>{
+ 'sfxRange','sfxVal','bgmRange','bgmVal','pauseBtn','pauseOverlay','resumeBtn'].forEach(id=>{
   el[id]=document.getElementById(id);
 });
 
@@ -713,6 +732,28 @@ function saveBest(){
   try{ localStorage.setItem('morseBattleHighScore', String(best)); }catch(e){}
 }
 loadBest();
+function saveSettings(){
+  try{
+    localStorage.setItem('morseBattleSettings', JSON.stringify({
+      soundOn, bgmOn, sfxVol, bgmVol, levelIndex:currentLevelIndex, metroOn
+    }));
+  }catch(e){}
+}
+function loadSettings(){
+  try{
+    const raw=localStorage.getItem('morseBattleSettings');
+    if(!raw) return;
+    const s=JSON.parse(raw);
+    if(typeof s.soundOn==='boolean') soundOn=s.soundOn;
+    if(typeof s.bgmOn==='boolean') bgmOn=s.bgmOn;
+    if(typeof s.sfxVol==='number') sfxVol=s.sfxVol;
+    if(typeof s.bgmVol==='number') bgmVol=s.bgmVol;
+    if(typeof s.levelIndex==='number'&&LEVELS[s.levelIndex]){
+      currentLevelIndex=s.levelIndex; baseUnit=LEVELS[currentLevelIndex].unit;
+    }
+    if(typeof s.metroOn==='boolean') metroOn=s.metroOn;
+  }catch(e){}
+}
 
 // ---------- HUD ----------
 function bump(elm){ elm.classList.remove('bump'); void elm.offsetWidth; elm.classList.add('bump'); }
@@ -787,28 +828,34 @@ function buildSpeedbar(){
       updateSpeedInfo();
       toast('速度を変更したよ','');
       sfxClick();
+      saveSettings();
     });
   });
 }
 function updateSpeedInfo(){
   el.speedInfo.textContent='WAVE '+wave+' ／ 実効 '+Math.round(1200/getUnit())+' WPM';
 }
-buildSpeedbar();
 
 // ---------- enemy rage ----------
 let rage=0, rageRAF=null, rageLast=0;
 function rageDuration(){
   const base=state.word.romaji.length*getUnit()*14;
-  return enemy.isBoss?base*0.85:base;
+  if(!enemy.isBoss) return base;
+  const hpRatio=enemy.maxHp>0?enemy.hp/enemy.maxHp:1;
+  return base*(0.5+0.45*hpRatio); // ボスはHPが減るほど攻撃が速くなる
 }
 function rageLoop(ts){
   if(!gameActive){ rageRAF=null; return; }
+  if(paused){ rageLast=0; rageRAF=requestAnimationFrame(rageLoop); return; }
   if(!rageLast) rageLast=ts;
   const dt=ts-rageLast; rageLast=ts;
   rage+=dt/rageDuration();
   if(rage>=1){ rage=0; enemyAttack(); }
   el.ragefill.style.width=(rage*100)+'%';
+  const danger=enemy.isBoss&&rage>0.88;
+  el.rageWarn.textContent=danger?'危険！こうげきが来る！':'こうげき間近！';
   el.rageWarn.classList.toggle('show', rage>0.72);
+  el.rageWarn.classList.toggle('danger', danger);
   rageRAF=requestAnimationFrame(rageLoop);
 }
 function startRage(){ rage=0; rageLast=0; if(!rageRAF) rageRAF=requestAnimationFrame(rageLoop); }
@@ -818,6 +865,10 @@ function enemyAttack(){
   el.enemybox.classList.add('lunge');
   sfxEnemyAttack();
   screenFlash();
+  if(enemy.isBoss){
+    el.arena.classList.remove('bossShake'); void el.arena.offsetWidth;
+    el.arena.classList.add('bossShake');
+  }
   toast('ようかいの攻撃を受けた！','ng');
   damagePlayer();
 }
@@ -877,6 +928,12 @@ function gameOver(){
   el.goScore.textContent=score;
   el.goWave.textContent=wave;
   el.goCombo.textContent=maxCombo;
+  const totalLetters=totalCorrectLetters+totalMistakes;
+  const accuracy=totalLetters>0?Math.round(totalCorrectLetters/totalLetters*100):100;
+  el.goAccuracy.textContent=accuracy+'%';
+  const elapsedSec=Math.max(0,Math.floor((performance.now()-runStartTime)/1000));
+  const mm=Math.floor(elapsedSec/60), ss=elapsedSec%60;
+  el.goTime.textContent=mm+':'+String(ss).padStart(2,'0');
   const isNew=score>best;
   if(isNew){ best=score; saveBest(); }
   el.goBest.textContent=best;
@@ -886,8 +943,11 @@ function gameOver(){
 }
 function resetRun(){
   wave=1; score=0; combo=0; maxCombo=0; playerHP=playerMaxHP;
-  gameActive=true;
+  totalCorrectLetters=0; totalMistakes=0; runStartTime=performance.now();
+  gameActive=true; paused=false;
   el.gameover.classList.remove('show');
+  el.pauseOverlay.classList.remove('show');
+  el.pauseBtn.textContent='一時停止';
   updateHUD();
   renderPlayerHearts();
   pickWord();
@@ -957,6 +1017,7 @@ function wasPerfect(){
   });
 }
 function flashWrong(wrongCode){
+  totalMistakes++;
   const wrongLetter=wrongCode?(MORSE_REV[wrongCode]||null):null;
   const expectedLetter=state.word.romaji[state.letterIndex];
   const expectedCode=currentExpectedCode();
@@ -981,6 +1042,7 @@ function showMissOverlay(wrongCode,wrongLetter,correctCode,correctLetter){
   el.missOverlay.classList.add('show');
 }
 function advanceLetter(){
+  totalCorrectLetters++;
   const crit=wasPerfect();
   state.buffer=''; state.lastRelease=null; state.pressLog=[];
   hitEnemy(crit);
@@ -1025,7 +1087,7 @@ function wordComplete(){
 
 // ---------- input ----------
 function startPress(){
-  if(!gameActive) return;
+  if(!gameActive||paused) return;
   if(state.isPressed) return;
   state.isPressed=true;
   const now=performance.now();
@@ -1080,8 +1142,29 @@ el.key.addEventListener('pointercancel',endPress);
 window.addEventListener('keydown',e=>{if(e.code==='Space'){e.preventDefault();if(!e.repeat)startPress();}});
 window.addEventListener('keyup',e=>{if(e.code==='Space'){e.preventDefault();endPress();}});
 
-el.skip.addEventListener('click',()=>{
+function togglePause(){
   if(!gameActive) return;
+  paused=!paused;
+  if(paused){
+    if(state.isPressed){
+      state.isPressed=false;
+      el.key.classList.remove('pressed');
+      stopKeyTone();
+    }
+    clearTimeout(state.commitTimer);
+    el.pauseOverlay.classList.add('show');
+    el.pauseBtn.textContent='再開';
+  }else{
+    el.pauseOverlay.classList.remove('show');
+    el.pauseBtn.textContent='一時停止';
+  }
+}
+el.pauseBtn.addEventListener('click',togglePause);
+el.resumeBtn.addEventListener('click',togglePause);
+window.addEventListener('keydown',e=>{if(e.code==='Escape'){togglePause();}});
+
+el.skip.addEventListener('click',()=>{
+  if(!gameActive||paused) return;
   combo=0; updateHUD();
   clearTimeout(state.commitTimer);
   toast('ようかいから逃げた…','');
@@ -1093,12 +1176,14 @@ el.soundToggle.addEventListener('click',()=>{
   el.soundToggle.textContent='効果音 '+(soundOn?'ON':'OFF');
   el.soundToggle.classList.toggle('on',soundOn);
   if(soundOn){ensureAudio();sfxClick();}else{stopKeyTone();}
+  saveSettings();
 });
 el.bgmToggle.addEventListener('click',()=>{
   bgmOn=!bgmOn;
   el.bgmToggle.textContent='BGM '+(bgmOn?'ON':'OFF');
   el.bgmToggle.classList.toggle('on',bgmOn);
   if(bgmOn){ensureAudio();startBGM();}else{stopBGM();}
+  saveSettings();
 });
 
 // ---------- volume sliders ----------
@@ -1111,15 +1196,14 @@ el.sfxRange.addEventListener('input', ()=>{
   el.sfxVal.textContent = el.sfxRange.value;
   updateSliderTrack(el.sfxRange);
   ensureAudio(); sfxClick();
+  saveSettings();
 });
 el.bgmRange.addEventListener('input', ()=>{
   bgmVol = el.bgmRange.value / 100;
   el.bgmVal.textContent = el.bgmRange.value;
   updateSliderTrack(el.bgmRange);
+  saveSettings();
 });
-// init track fills
-updateSliderTrack(el.sfxRange);
-updateSliderTrack(el.bgmRange);
 
 // ---------- rhythm guide ----------
 let metroOn=false, metroTimeout=null;
@@ -1137,9 +1221,26 @@ el.metroToggle.addEventListener('click',()=>{
   el.metroWrap.classList.toggle('active',metroOn);
   if(metroOn){ metroTick(); }
   else{ clearTimeout(metroTimeout); metroTimeout=null; el.metroDot.classList.remove('tick'); }
+  saveSettings();
 });
 
 // ---------- init ----------
+loadSettings();
+buildSpeedbar();
+el.soundToggle.textContent='効果音 '+(soundOn?'ON':'OFF');
+el.soundToggle.classList.toggle('on',soundOn);
+el.bgmToggle.textContent='BGM '+(bgmOn?'ON':'OFF');
+el.bgmToggle.classList.toggle('on',bgmOn);
+el.sfxRange.value=Math.round(sfxVol*100);
+el.sfxVal.textContent=el.sfxRange.value;
+updateSliderTrack(el.sfxRange);
+el.bgmRange.value=Math.round(bgmVol*100);
+el.bgmVal.textContent=el.bgmRange.value;
+updateSliderTrack(el.bgmRange);
+el.metroToggle.textContent='リズムガイド '+(metroOn?'ON':'OFF');
+el.metroToggle.classList.toggle('on',metroOn);
+el.metroWrap.classList.toggle('active',metroOn);
+if(metroOn) metroTick();
 updateHUD();
 renderPlayerHearts();
 pickWord();
